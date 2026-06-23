@@ -6,9 +6,10 @@ from dolfinx.io import gmsh as gmshio
 
 # Cell tags — fixed, not user-configurable
 ELECTRODE_TAG = 1
-PIEZO_TAG     = 2
-CAP_TAG       = 3
-EPOXY_TAG     = 4
+PIEZO_TAG_ODD     = 2
+PIEZO_TAG_EVEN = 3
+CAP_TAG       = 4
+EPOXY_TAG     = 5
 
 
 @dataclass
@@ -46,7 +47,8 @@ def _build_gmsh_model(name: str, d: _Dims) -> gmsh.model:
 
     all_tags       = []
     electrode_tags = []
-    piezo_tags     = []
+    piezo_odd_tags     = []
+    piezo_even_tags = []
     cap_tags       = []
     epoxy_tags     = []
 
@@ -63,8 +65,12 @@ def _build_gmsh_model(name: str, d: _Dims) -> gmsh.model:
     z += d.e_dz
 
     # n_layers unit cells: piezoelectric slab + electrode layer
-    for _ in range(d.n_layers):
-        all_tags.extend(_add_piezo_layer(model, electrode_tags, piezo_tags, epoxy_tags, x, y, z, d))
+    for i in range(d.n_layers):
+        if i % 2 == 0: # even:
+            all_tags.extend(_add_piezo_layer(model, electrode_tags, piezo_even_tags, epoxy_tags, x, y, z, d))
+        else: # odd
+            all_tags.extend(_add_piezo_layer(model, electrode_tags, piezo_odd_tags, epoxy_tags, x, y, z, d))
+
         z += d.piezo_dz + d.e_dz
 
     # Top electrode layer
@@ -80,7 +86,8 @@ def _build_gmsh_model(name: str, d: _Dims) -> gmsh.model:
     # Without this, touching boxes produce a disconnected mesh and a singular system.
     electrode_set = set(electrode_tags)
     cap_set       = set(cap_tags)
-    piezo_set     = set(piezo_tags)
+    piezo_odd_set     = set(piezo_odd_tags)
+    piezo_even_set = set(piezo_even_tags)
     epoxy_set     = set(epoxy_tags)
 
     all_dimtags = [(3, t) for t in all_tags]
@@ -88,12 +95,13 @@ def _build_gmsh_model(name: str, d: _Dims) -> gmsh.model:
 
     # Overlapping source volumes (epoxy fill vs electrodes) produce shared child volumes
     # in out_map. Process in priority order so each child is claimed exactly once.
-    new_electrode_tags, new_piezo_tags, new_cap_tags, new_epoxy_tags = [], [], [], []
+    new_electrode_tags, new_piezo_odd_tags, new_piezo_even_tags, new_cap_tags, new_epoxy_tags = [], [], [], [], []
     seen = set()
     for priority_set, dest in [
         (electrode_set, new_electrode_tags),
         (cap_set,       new_cap_tags),
-        (piezo_set,     new_piezo_tags),
+        (piezo_odd_set,     new_piezo_odd_tags),
+        (piezo_even_set,    new_piezo_even_tags),
         (epoxy_set,     new_epoxy_tags),
     ]:
         for i, (_, orig_tag) in enumerate(all_dimtags):
@@ -106,7 +114,8 @@ def _build_gmsh_model(name: str, d: _Dims) -> gmsh.model:
 
     model.occ.synchronize()
     model.add_physical_group(dim=3, tags=new_electrode_tags, tag=ELECTRODE_TAG)
-    model.add_physical_group(dim=3, tags=new_piezo_tags,     tag=PIEZO_TAG)
+    model.add_physical_group(dim=3, tags=new_piezo_odd_tags,     tag=PIEZO_TAG_ODD)
+    model.add_physical_group(dim=3, tags=new_piezo_even_tags,     tag=PIEZO_TAG_EVEN)
     model.add_physical_group(dim=3, tags=new_cap_tags,       tag=CAP_TAG)
     model.add_physical_group(dim=3, tags=new_epoxy_tags,     tag=EPOXY_TAG)
 

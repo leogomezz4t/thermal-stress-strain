@@ -55,7 +55,7 @@ from dolfinx.plot import vtk_mesh
 from dolfinx.mesh import uniform_refine
 
 from stacks.LN_Al_full import LN_Al_Full
-from stacks.full_piezo_stack import PIEZO_TAG, CAP_TAG, EPOXY_TAG, ELECTRODE_TAG
+from stacks.full_piezo_stack import PIEZO_TAG_EVEN, PIEZO_TAG_ODD, CAP_TAG, EPOXY_TAG, ELECTRODE_TAG
 from materials import Materials
 
 # ============================================================
@@ -99,10 +99,15 @@ CLAMP_ENDS = False
 # with this R, so changing the cut is a one-line edit.
 # ============================================================
 th = np.radians(36)
-X_CUT = np.array([[0,0,1],[1,0,0],[0,1,0]], dtype=float).T   # X-cut
-Y_36_CUT = np.array([[1, 0, 0], [0, np.cos(th), -np.sin(th)], [0, np.sin(th), np.cos(th)]])
+X_CUT_ODD = np.array([[0,0,1],[1,0,0],[0,1,0]], dtype=float).T   # X-cut
+X_CUT_EVEN = np.array([[0,0,1], [-1, 0, 0], [0, -1, 0]], dtype=float).T
+Y_36_CUT_ODD = np.array([[1, 0, 0], [0, np.cos(th), -np.sin(th)], [0, np.sin(th), np.cos(th)]])
+Y_36_CUT_EVEN = np.array([[1, 0, 0], [0, -np.cos(th), np.sin(th)], [0, -np.sin(th), -np.cos(th)]])
 
-CRYSTAL_ROTATION = Y_36_CUT
+
+
+CRYSTAL_ROTATION     = X_CUT_EVEN   # rotation for PIEZO_TAG_ODD layers
+CRYSTAL_ROTATION_ALT = X_CUT_ODD  # rotation for PIEZO_TAG_EVEN layers
 
 # ============================================================
 # TEMPERATURE-DEPENDENT THERMAL EXPANSION DATA
@@ -266,7 +271,8 @@ def isotropic_stiffness_voigt(E: float, nu: float) -> np.ndarray:
 piezo_mesh = LN_Al_Full()
 
 MATERIAL_NAMES = {
-    PIEZO_TAG:     "LiNbO3",
+    PIEZO_TAG_ODD:     "LiNbO3",
+    PIEZO_TAG_EVEN: "LiNbO3",
     ELECTRODE_TAG: "Aluminum",
     CAP_TAG:       "Macor",
     EPOXY_TAG:     "Epoxy 353ND",
@@ -313,12 +319,15 @@ print(f"  Macor:         {eth_iso['MACOR']*100:+.4f} %")
 print(f"  Epoxy 353ND:   {eth_iso['EPOXY_353ND']*100:+.4f} %")
 print(f"  LiNbO3 a-axis: {eth_a*100:+.4f} %   c-axis: {eth_c*100:+.4f} %")
 
-# LiNbO3 thermal expansion tensor: diagonal in crystal frame (a, a, c),
-# rotated to the mesh frame.  R diag Rᵀ is the tensor transformation rule.
-eps_th_linbo3_tensor = R @ np.diag([eth_a, eth_a, eth_c]) @ R.T
+
+def linbo3_C6_and_eth(rot: np.ndarray):
+    """Stiffness (6×6) and eigenstrain (6-vector) for LiNbO3 in a given orientation."""
+    C6  = rotate_stiffness(C_LINBO3_CRYSTAL, rot)
+    eth = strain_tensor_to_voigt(rot @ np.diag([eth_a, eth_a, eth_c]) @ rot.T)
+    return C6, eth
+
 
 material_C6 = {
-    PIEZO_TAG:     rotate_stiffness(C_LINBO3_CRYSTAL, R),
     ELECTRODE_TAG: isotropic_stiffness_voigt(piezo_mesh.materials[ELECTRODE_TAG].E,
                                              piezo_mesh.materials[ELECTRODE_TAG].nu),
     CAP_TAG:       isotropic_stiffness_voigt(piezo_mesh.materials[CAP_TAG].E,
@@ -328,7 +337,6 @@ material_C6 = {
 }
 
 material_eps_th = {
-    PIEZO_TAG:     strain_tensor_to_voigt(eps_th_linbo3_tensor),
     ELECTRODE_TAG: eth_iso["ALUMINUM"]    * np.array([1, 1, 1, 0, 0, 0], dtype=float),
     CAP_TAG:       eth_iso["MACOR"]       * np.array([1, 1, 1, 0, 0, 0], dtype=float),
     EPOXY_TAG:     eth_iso["EPOXY_353ND"] * np.array([1, 1, 1, 0, 0, 0], dtype=float),
@@ -346,10 +354,21 @@ eps_th_fn = fem.Function(DG0_eth)
 C_flat   = C_fn.x.array.reshape(-1, 36)       # one flattened 6×6 per cell
 eth_flat = eps_th_fn.x.array.reshape(-1, 6)   # one 6-vector per cell
 
-for tag in MATERIAL_NAMES:
+# Assign isotropic materials.
+for tag in (ELECTRODE_TAG, CAP_TAG, EPOXY_TAG):
     cells = piezo_mesh.cell_tags.find(tag)
     C_flat[cells, :]   = material_C6[tag].flatten()
     eth_flat[cells, :] = material_eps_th[tag]
+
+# Assign LiNbO3 — even and odd layers carry different crystal orientations.
+C6_odd,  eth6_odd  = linbo3_C6_and_eth(CRYSTAL_ROTATION)
+C6_even, eth6_even = linbo3_C6_and_eth(CRYSTAL_ROTATION_ALT)
+
+for tag, C6, eth6 in ((PIEZO_TAG_ODD,  C6_odd,  eth6_odd),
+                      (PIEZO_TAG_EVEN, C6_even, eth6_even)):
+    cells = piezo_mesh.cell_tags.find(tag)
+    C_flat[cells, :]   = C6.flatten()
+    eth_flat[cells, :] = eth6
 
 # ============================================================
 # WEAK FORM

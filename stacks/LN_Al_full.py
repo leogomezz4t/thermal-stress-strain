@@ -1,7 +1,7 @@
 
 from mesh import Mesh
 from materials import Materials
-from stacks.full_piezo_stack import create_full_stack, PIEZO_TAG, CAP_TAG, EPOXY_TAG, ELECTRODE_TAG
+from stacks.full_piezo_stack import create_full_stack, PIEZO_TAG_EVEN, PIEZO_TAG_ODD, CAP_TAG, EPOXY_TAG, ELECTRODE_TAG
 
 # ALL IN mm
 LN_LENGTH = 10
@@ -13,7 +13,8 @@ M_DZ = 0.3
 E_DZ = 0.08
 
 materials = {
-    PIEZO_TAG:     Materials.LITHIUM_NIOBATE_4K,
+    PIEZO_TAG_EVEN:Materials.LITHIUM_NIOBATE_4K,
+    PIEZO_TAG_ODD: Materials.LITHIUM_NIOBATE_4K,
     ELECTRODE_TAG: Materials.ALUMINUM_4K,
     CAP_TAG:       Materials.MACOR_4K,
     EPOXY_TAG:     Materials.EPOXY_353ND_4K,
