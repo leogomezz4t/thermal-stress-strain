@@ -9,9 +9,7 @@ class MaterialProperties:
     """
     E: float        # Young's modulus [MPa]
     nu: float       # Poisson's ratio
-    alpha: float    # Coefficient of thermal expansion [1/K]
-    sigma_f: float  # Fracture/tensile strength [MPa]
-    thermal_strain_4k: float = 0 # The thermal strain cooled down to 4K from 293 K
+    thermal_strain: float = 0 # The thermal strain cooled down to 4K from 293 K
 
 @dataclass
 class LithiumNiobateProperties:
@@ -19,10 +17,10 @@ class LithiumNiobateProperties:
     Anisotropic properties of Lithium Niobate
     """
 
-    thermal_strain_4k_c_axis: float = -0.000633
-    thermal_strain_4k_a_axis: float = -0.00244
+    thermal_strain_c_axis: float = -0.000633
+    thermal_strain_a_axis: float = -0.00244
 
-    def get_cryo_stiffness_matrix():
+    def get_cryo_stiffness_matrix(self):
         """
             Returns the Voigt stiffness matrix of Lithium Niobate at 6K in MPa
         """
@@ -64,9 +62,9 @@ class Materials:
                            becomes brittle.  Contact Epo-Tek for data or measure directly.
     """
     LITHIUM_NIOBATE_4K = LithiumNiobateProperties()
-    ALUMINUM_4K        = MaterialProperties(E=78_000,  nu=0.33, alpha=0.5e-6, sigma_f=550, thermal_strain_4k=-415.45E-5 )
-    MACOR_4K           = MaterialProperties(E=70_000,  nu=0.29, alpha=0.2e-6, sigma_f=80, thermal_strain_4k=-0.001692)   # ESTIMATE
-    EPOXY_353ND_4K     = MaterialProperties(E=9_000,   nu=0.35, alpha=5e-6,   sigma_f=35, thermal_strain_4k=-0.014)   # VERY UNCERTAIN
-    STAINLESS_STEEL_4K = MaterialProperties(E=210_000, nu=0.30, alpha=0.8e-6, sigma_f=1246) # NIST / Brookhaven (316L)
+    ALUMINUM_4K        = MaterialProperties(E=80_870,  nu=0.33, thermal_strain=-0.0041545)
+    MACOR_4K           = MaterialProperties(E=75_000,  nu=0.29, thermal_strain=-0.001692)   # ESTIMATE
+    EPOXY_353ND_4K     = MaterialProperties(E=4_000,   nu=0.35, thermal_strain=-0.014)   # VERY UNCERTAIN
+    STAINLESS_STEEL_4K = MaterialProperties(E=210_000, nu=0.27, thermal_strain=-0.0030004)
 
 
