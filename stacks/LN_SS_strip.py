@@ -1,7 +1,7 @@
 
 from mesh import Mesh
 from materials import Materials
-from stacks.strip_piezo_stack import create_strip_stack, PIEZO_TAG, CAP_TAG, EPOXY_TAG, ELECTRODE_TAG
+from stacks.strip_piezo_stack import create_strip_stack, PIEZO_TAG_EVEN, PIEZO_TAG_ODD, CAP_TAG, EPOXY_TAG, ELECTRODE_TAG
 
 # ALL IN mm
 LN_LENGTH = 10
@@ -15,7 +15,8 @@ E_DY = LN_LENGTH
 E_DZ = 0.01 # Need to measure
 
 materials = {
-    PIEZO_TAG:        Materials.LITHIUM_NIOBATE_4K,
+    PIEZO_TAG_EVEN:        Materials.LITHIUM_NIOBATE_4K,
+    PIEZO_TAG_ODD:        Materials.LITHIUM_NIOBATE_4K,
     ELECTRODE_TAG: Materials.STAINLESS_STEEL_4K,
     CAP_TAG:     Materials.MACOR_4K,
     EPOXY_TAG:     Materials.EPOXY_353ND_4K,
@@ -31,7 +32,8 @@ class LN_SS_Strip(Mesh):
             E_DZ,
             M_LENGTH,
             M_DZ,
-            n_layers=16
+            n_layers=16,
+            n_refinements=1
         )
         super().__init__(
             msh_data,

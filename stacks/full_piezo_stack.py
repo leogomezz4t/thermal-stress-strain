@@ -160,6 +160,7 @@ def create_full_stack(
     cap_dz:       float,
     epoxy_dz:     float = 0.001,
     n_layers:     int   = 16,
+    n_refinements:int = 1,
     name:         str   = "FullPiezoStack",
 ):
     """Build and mesh a full-electrode piezo stack with epoxy bonding layers.
@@ -187,13 +188,15 @@ def create_full_stack(
         epoxy_dz=epoxy_dz,
         cap_length=cap_length,
         cap_dz=cap_dz,
-        n_layers=n_layers,
+        n_layers=n_layers
     )
 
     gmsh.initialize()
     gmsh.option.setNumber("General.Terminal", 0)
     try:
         model     = _build_gmsh_model(name, dims)
+        for _ in range(n_refinements):
+            model.mesh.refine()
         mesh_data = _model_to_mesh(model, name, MPI.COMM_SELF)
     finally:
         gmsh.finalize()

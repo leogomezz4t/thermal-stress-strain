@@ -5,23 +5,8 @@
 # is needed.  Stress arises from differential thermal contraction between the
 # four materials: LiNbO3 layers, aluminum electrodes, Macor caps, 353ND epoxy.
 #
-# Improvements over v2
-# --------------------
-# 1. INTEGRATED THERMAL STRAIN.
-#    v2 used a constant coefficient of thermal expansion:  ε_th = α·ΔT.
-#    But α varies enormously between 293 K and 4 K — it falls roughly as T³
-#    below the Debye temperature and is essentially zero below ~20 K.
-#    Using α(4K)·ΔT underestimates the contraction by orders of magnitude;
-#    using α(293K)·ΔT overestimates it by ~40%.  The correct eigenstrain is
 #
-#        ε_th = ∫_{T_REF}^{T_CRYO} α(T) dT      (= ΔL/L of free contraction)
-#
-#    Here each material carries a tabulated α(T) curve and the integral is
-#    evaluated numerically (trapezoid rule).  This also makes it trivial to
-#    re-run the model at intermediate temperatures (e.g. 77 K): just change
-#    T_CRYO — the integral picks up the right partial contraction.
-#
-# 2. ANISOTROPIC LiNbO3.
+# ANISOTROPIC LiNbO3.
 #    v2 treated LiNbO3 as isotropic.  LiNbO3 is a trigonal crystal (class 3m)
 #    with 6 independent elastic constants and a strongly direction-dependent
 #    thermal expansion (α_a ≈ 2× α_c).  v3 stores the full 6×6 Voigt stiffness
@@ -29,14 +14,6 @@
 #    so isotropic and anisotropic materials are handled by one code path.
 #    The crystal cut (orientation of the crystal axes relative to the stack)
 #    is a single rotation matrix — see CRYSTAL_ROTATION below.
-#
-# 3. WELL-POSED BOUNDARY CONDITIONS.
-#    v2 solved with no Dirichlet BCs at all (the clamps were commented out),
-#    which leaves the 6 rigid-body modes in the null space — the LU solve
-#    only "works" by floating-point accident.  v3 pins exactly 6 DOFs at three
-#    corner vertices (the classic "3-2-1" scheme).  This is statically
-#    determinate: it removes rigid translation/rotation but exerts no force,
-#    so it adds zero spurious stress.  All stress comes from CTE mismatch.
 #
 # Conventions
 # -----------
@@ -55,6 +32,8 @@ from dolfinx.plot import vtk_mesh
 from dolfinx.mesh import uniform_refine
 
 from stacks.LN_Al_full import LN_Al_Full
+from stacks.LN_Al_strip import LN_Al_Strip
+from stacks.LN_SS_strip import LN_SS_Strip
 from stacks.full_piezo_stack import PIEZO_TAG_EVEN, PIEZO_TAG_ODD, CAP_TAG, EPOXY_TAG, ELECTRODE_TAG
 from materials import Materials
 
@@ -67,7 +46,8 @@ T_CRYO = 4.0     # Cryogenic operating temperature [K]
 # ============================================================
 # VISUALISATION
 # ============================================================
-WARP_SCALE = 200   # Displacement magnification factor for the deformed mesh plot
+AUTO_SCALE = True
+MANUAL_WARP_SCALE = 200   # Displacement magnification factor for the deformed mesh plot
 
 # ============================================================
 # BOUNDARY CONDITIONS
@@ -76,6 +56,9 @@ WARP_SCALE = 200   # Displacement magnification factor for the deformed mesh plo
 #         infinitely stiff fixtures.  Reality is between the two extremes.
 # ============================================================
 CLAMP_ENDS = False
+
+# MESH SELECTION
+piezo_mesh = LN_Al_Strip()
 
 # ============================================================
 # CRYSTAL ORIENTATION OF THE LiNbO3 LAYERS
@@ -106,65 +89,8 @@ Y_36_CUT_EVEN = np.array([[1, 0, 0], [0, -np.cos(th), np.sin(th)], [0, -np.sin(t
 
 
 
-CRYSTAL_ROTATION     = X_CUT_EVEN   # rotation for PIEZO_TAG_ODD layers
-CRYSTAL_ROTATION_ALT = X_CUT_ODD  # rotation for PIEZO_TAG_EVEN layers
-
-# ============================================================
-# TEMPERATURE-DEPENDENT THERMAL EXPANSION DATA
-#
-# Each entry is a table of the linear thermal expansion coefficient α(T)
-# sampled from 4 K to 293 K.  α(T) → 0 as T → 0 for all solids (3rd law),
-# which is why the constant-α model fails so badly across a cryogenic range.
-#
-# The thermal eigenstrain is the integral of these curves (see
-# integrated_thermal_strain below).  Sanity anchor: NIST gives the total
-# contraction ΔL/L (293 K → 4 K) of aluminum 6061 as ≈ −0.415%; the table
-# below integrates to −0.417%.
-#
-# DOUBLE CHECK — curve shapes are AI-estimated from typical published data;
-# verify against NIST cryogenic material properties / Ekin "Experimental
-# Techniques for Low-Temperature Measurements" before trusting:
-#   ALUMINUM     — medium-high confidence (NIST TRC 6061 shape, anchor above).
-#   MACOR        — LOW.  Corning quotes α ≈ 9.3e-6 near RT; the low-T rolloff
-#                  is assumed ceramic-like.  Integrated total ≈ −0.16%.
-#   EPOXY_353ND  — VERY LOW.  Unfilled-epoxy-like curve, total ≈ −0.9%
-#                  (cf. Stycast 1266 ≈ −1.15%).  Measure or ask Epo-Tek.
-#   LiNbO3       — LOW.  RT anchors α_a ≈ 15.4e-6, α_c ≈ 7.5e-6 (Smith &
-#                  Welsh 1971); low-T rolloff assumed Debye-like.  Some
-#                  literature reports anomalous (possibly negative) α_c at
-#                  low temperature — MUST verify before trusting c-axis strain.
-# ============================================================
-
-# Temperatures [K] shared by all tables, ascending
-ALPHA_T = np.array([4.0, 20.0, 40.0, 60.0, 80.0, 100.0, 140.0, 180.0, 220.0, 260.0, 293.0])
-
-ALPHA_TABLES = {
-    #                       4K    20K   40K   60K   80K   100K  140K  180K  220K  260K  293K   [1e-6/K]
-    "ALUMINUM":    np.array([0.0,  0.5,  2.6,  5.6,  8.9, 12.2, 16.6, 19.3, 21.0, 22.0, 22.7]) * 1e-6,
-    "MACOR":       np.array([0.0,  0.2,  0.8,  1.8,  3.0,  4.2,  6.2,  7.6,  8.5,  9.1,  9.4]) * 1e-6,
-    "EPOXY_353ND": np.array([0.5,  4.5, 10.0, 15.0, 19.5, 24.0, 31.2, 37.8, 44.2, 49.7, 54.0]) * 1e-6,
-    "LINBO3_A":    np.array([0.0,  0.3,  1.5,  3.4,  5.5,  7.5, 10.7, 12.7, 14.0, 14.8, 15.4]) * 1e-6,  # ⊥ c-axis
-    "LINBO3_C":    np.array([0.0,  0.1,  0.5,  1.2,  2.2,  3.2,  4.9,  6.0,  6.8,  7.3,  7.5]) * 1e-6,  # ∥ c-axis
-}
-
-
-def integrated_thermal_strain(alpha_table: np.ndarray, T_from: float, T_to: float) -> float:
-    """ε_th = ∫_{T_from}^{T_to} α(T) dT, by trapezoid rule on a fine grid.
-
-    Returns the free linear strain ΔL/L of the material between the two
-    temperatures.  Negative for cooling (T_to < T_from): the material wants
-    to shrink, and whatever shrinkage the surrounding structure prevents
-    shows up as stress.
-
-    The table is linearly interpolated onto a fine grid first so that
-    T_from / T_to need not coincide with table points (e.g. T_CRYO = 77 K).
-    """
-    lo, hi = min(T_from, T_to), max(T_from, T_to)
-    T_grid = np.linspace(lo, hi, 2000)
-    alpha  = np.interp(T_grid, ALPHA_T, alpha_table)
-    integral = float(np.sum(0.5 * (alpha[1:] + alpha[:-1]) * np.diff(T_grid)))
-    return integral if T_to >= T_from else -integral
-
+CRYSTAL_ROTATION     = Y_36_CUT_EVEN   # rotation for PIEZO_TAG_ODD layers
+CRYSTAL_ROTATION_ALT = Y_36_CUT_ODD  # rotation for PIEZO_TAG_EVEN layers
 
 # ============================================================
 # LiNbO3 ANISOTROPIC STIFFNESS (crystal frame)
@@ -182,28 +108,9 @@ def integrated_thermal_strain(alpha_table: np.ndarray, T_from: float, T_to: floa
 # The c14 term couples normal strain in the basal plane to shear — its SIGN
 # depends on the choice of +X axis (IEEE 1978 convention used here); its
 # magnitude is small, so an orientation sign error is a minor effect.
-#
-# These are room-temperature constants.  materials.py estimates ~3%
-# stiffening at 4 K for LiNbO3 (by analogy with other oxide ceramics, LOW
-# confidence) — applied uniformly here via CRYO_STIFFENING.
 # ============================================================
+C_LINBO3_CRYSTAL = Materials.LITHIUM_NIOBATE_4K.get_cryo_stiffness_matrix()
 
-CRYO_STIFFENING = Materials.LITHIUM_NIOBATE_4K.E / Materials.LITHIUM_NIOBATE.E   # ≈ +3%, matches the materials.py 4K estimate
-
-_c11, _c12, _c13 = 203_000.0, 57_300.0, 75_200.0   # [MPa]
-_c14, _c33, _c44 = 8_500.0, 242_400.0, 59_500.0    # [MPa]
-_c66 = (_c11 - _c12) / 2
-
-C_LINBO3_ROOM = np.array([
-    [_c11,  _c12,  _c13,  _c14,  0.0,   0.0 ],
-    [_c12,  _c11,  _c13, -_c14,  0.0,   0.0 ],
-    [_c13,  _c13,  _c33,  0.0,   0.0,   0.0 ],
-    [_c14, -_c14,  0.0,   _c44,  0.0,   0.0 ],
-    [0.0,   0.0,   0.0,   0.0,   _c44,  _c14],
-    [0.0,   0.0,   0.0,   0.0,   _c14,  _c66],
-])
-
-C_LINBO3_CRYSTAL = CRYO_STIFFENING * C_LINBO3_ROOM
 # ============================================================
 # VOIGT / TENSOR UTILITIES
 #
@@ -268,14 +175,10 @@ def isotropic_stiffness_voigt(E: float, nu: float) -> np.ndarray:
 # MESH
 # ============================================================
 
-piezo_mesh = LN_Al_Full()
 
 MATERIAL_NAMES = {
-    PIEZO_TAG_ODD:     "LiNbO3",
-    PIEZO_TAG_EVEN: "LiNbO3",
-    ELECTRODE_TAG: "Aluminum",
-    CAP_TAG:       "Macor",
-    EPOXY_TAG:     "Epoxy 353ND",
+    tag : mat.name
+    for tag, mat in piezo_mesh.materials.items()
 }
 
 msh  = piezo_mesh.msh
@@ -307,16 +210,17 @@ R = CRYSTAL_ROTATION
 
 # Scalar integrated strains (negative — everything shrinks on cooling)
 eth_iso = {
-    name: integrated_thermal_strain(ALPHA_TABLES[name], T_REF, T_CRYO)
-    for name in ("ALUMINUM", "MACOR", "EPOXY_353ND")
+    ELECTRODE_TAG: piezo_mesh.materials[ELECTRODE_TAG].thermal_strain,
+    CAP_TAG: piezo_mesh.materials[CAP_TAG].thermal_strain,
+    EPOXY_TAG: piezo_mesh.materials[EPOXY_TAG].thermal_strain
 }
-eth_a = integrated_thermal_strain(ALPHA_TABLES["LINBO3_A"], T_REF, T_CRYO)
-eth_c = integrated_thermal_strain(ALPHA_TABLES["LINBO3_C"], T_REF, T_CRYO)
+eth_a = Materials.LITHIUM_NIOBATE_4K.thermal_strain_a_axis
+eth_c = Materials.LITHIUM_NIOBATE_4K.thermal_strain_c_axis
 
 print(f"Integrated thermal strain {T_REF:.0f} K → {T_CRYO:.0f} K  (ΔL/L of free contraction):")
-print(f"  Aluminum:      {eth_iso['ALUMINUM']*100:+.4f} %")
-print(f"  Macor:         {eth_iso['MACOR']*100:+.4f} %")
-print(f"  Epoxy 353ND:   {eth_iso['EPOXY_353ND']*100:+.4f} %")
+print(f"  {piezo_mesh.materials[ELECTRODE_TAG].name}:      {eth_iso[ELECTRODE_TAG]*100:+.4f} %")
+print(f"  {piezo_mesh.materials[CAP_TAG].name}:         {eth_iso[CAP_TAG]*100:+.4f} %")
+print(f"  {piezo_mesh.materials[EPOXY_TAG].name}:   {eth_iso[EPOXY_TAG]*100:+.4f} %")
 print(f"  LiNbO3 a-axis: {eth_a*100:+.4f} %   c-axis: {eth_c*100:+.4f} %")
 
 
@@ -337,9 +241,9 @@ material_C6 = {
 }
 
 material_eps_th = {
-    ELECTRODE_TAG: eth_iso["ALUMINUM"]    * np.array([1, 1, 1, 0, 0, 0], dtype=float),
-    CAP_TAG:       eth_iso["MACOR"]       * np.array([1, 1, 1, 0, 0, 0], dtype=float),
-    EPOXY_TAG:     eth_iso["EPOXY_353ND"] * np.array([1, 1, 1, 0, 0, 0], dtype=float),
+    ELECTRODE_TAG: eth_iso[ELECTRODE_TAG]    * np.array([1, 1, 1, 0, 0, 0], dtype=float),
+    CAP_TAG:       eth_iso[CAP_TAG]       * np.array([1, 1, 1, 0, 0, 0], dtype=float),
+    EPOXY_TAG:     eth_iso[EPOXY_TAG] * np.array([1, 1, 1, 0, 0, 0], dtype=float),
 }
 
 # Store per-cell data in DG0 (piecewise-constant) spaces: a 6×6 matrix and a
@@ -505,6 +409,9 @@ uh.name = "u"
 disp_mag = np.linalg.norm(uh.x.array.real.reshape(-1, tdim), axis=1)
 print(f"Displacement — max magnitude: {disp_mag.max():.4e} mm")
 
+# Automatically define WARP SCALE
+WARP_SCALE = round(5/disp_mag.max()) if AUTO_SCALE else MANUAL_WARP_SCALE
+
 # ============================================================
 # POST-PROCESSING: Von Mises stress
 # σ_VM = sqrt(3/2 · s:s)   where s = σ − (1/3) tr(σ) I  (deviatoric part)
@@ -545,12 +452,6 @@ max_principal = principal[:, -1]                 # σ₁ per cell (most tensile)
 max_sp        = float(max_principal.max())
 print(f"Max principal stress σ₁: {max_sp:.2f} MPa")
 
-# Fracture legend on the σ₁ panel — the correct comparison for brittle materials
-fracture_legend = [
-    [f"{MATERIAL_NAMES[tag]}  σ_f = {mat.sigma_f} MPa", "black"]
-    for tag, mat in piezo_mesh.materials.items()
-    if tag in MATERIAL_NAMES
-]
 
 # ============================================================
 # VISUALISATION: three panels
@@ -589,8 +490,9 @@ print(f"Max σ₁ at (x={sp_cell_pt[0]:.2f}, y={sp_cell_pt[1]:.2f}, "
 grid_sp_clipped = grid_vm.clip(normal="z", origin=sp_cell_pt)
 sp_marker       = pyvista.Sphere(radius=0.15, center=sp_cell_pt)
 
-sp_min_val = float(max_principal.min())
-sp_max_val = float(max_principal.max())
+sp_min_val  = float(max_principal.min())
+sp_max_val  = float(max_principal.max())
+sp_clip_max = float(np.percentile(max_principal, 99))
 
 N_BUCKETS       = 10
 sp_bucket_width = (sp_max_val - sp_min_val) / N_BUCKETS if sp_max_val != sp_min_val else 1.0
@@ -601,6 +503,7 @@ sp_bucket_cells = [np.where(sp_bucket_idx == i)[0] for i in range(N_BUCKETS)]
 
 vm_min_val      = float(vm_array.min())
 vm_max_val      = float(vm_array.max())
+vm_clip_max     = float(np.percentile(vm_array, 99))
 vm_bucket_width = (vm_max_val - vm_min_val) / N_BUCKETS if vm_max_val != vm_min_val else 1.0
 vm_bucket_idx   = np.clip(
     ((vm_array - vm_min_val) / vm_bucket_width).astype(int), 0, N_BUCKETS - 1
@@ -618,20 +521,18 @@ plotter.add_scalar_bar("‖u‖ [mm]")
 # ---- Subplot 1: Von Mises ----
 plotter.subplot(0, 1)
 plotter.add_text("Von Mises — clipped at peak z  (ductile metals)", font_size=10)
-plotter.add_mesh(grid_vm_clipped, scalars="von_mises", cmap="hot", show_edges=False)
+plotter.add_mesh(grid_vm_clipped, scalars="von_mises", cmap="hot", show_edges=False,
+                 clim=[vm_min_val, vm_clip_max])
 plotter.add_mesh(vm_marker, color="cyan")
 plotter.add_scalar_bar("σ_VM [MPa]", fmt="%.2f")
 
 # ---- Subplot 2: Max principal stress ----
 plotter.subplot(0, 2)
 plotter.add_text("Max principal stress σ₁ — clipped at peak z  (brittle ceramics)", font_size=10)
-plotter.add_mesh(grid_sp_clipped, scalars="max_principal", cmap="hot", show_edges=False)
+plotter.add_mesh(grid_sp_clipped, scalars="max_principal", cmap="hot", show_edges=False,
+                 clim=[sp_min_val, sp_clip_max])
 plotter.add_mesh(sp_marker, color="cyan")
 plotter.add_scalar_bar("σ₁ [MPa]", fmt="%.2f")
-legend_actor = plotter.add_legend(fracture_legend, bcolor=None, face="rectangle",
-                                  size=(0.45, 0.18), loc="upper right")
-legend_actor.GetEntryTextProperty().SetFontSize(10)
-legend_actor.SetPosition(0.50, 0.80)
 
 plotter.show()
 
@@ -652,7 +553,7 @@ vm_equi_band2 = [None]
 plotter2.subplot(0, 0)
 plotter2.add_mesh(
     grid_vm, scalars="max_principal", cmap="hot", opacity=0.15,
-    clim=[sp_min_val, sp_max_val], show_edges=False,
+    clim=[sp_min_val, sp_clip_max], show_edges=False,
 )
 plotter2.add_scalar_bar("σ₁ [MPa]")
 
@@ -660,7 +561,7 @@ plotter2.add_scalar_bar("σ₁ [MPa]")
 plotter2.subplot(0, 1)
 plotter2.add_mesh(
     grid_vm, scalars="von_mises", cmap="hot", opacity=0.15,
-    clim=[vm_min_val, vm_max_val], show_edges=False,
+    clim=[vm_min_val, vm_clip_max], show_edges=False,
 )
 plotter2.add_scalar_bar("σ_VM [MPa]")
 
@@ -689,7 +590,7 @@ def _show_equi_bucket(bucket):
         sp_equi_band2[0] = plotter2.add_mesh(
             grid_vm.extract_cells(sp_cells),
             scalars="max_principal", cmap="hot", opacity=1.0,
-            clim=[sp_min_val, sp_max_val], show_edges=False, show_scalar_bar=False,
+            clim=[sp_min_val, sp_clip_max], show_edges=False, show_scalar_bar=False,
         )
     plotter2.subplot(0, 0)
     plotter2.add_text(_equi_title_sp(bucket), font_size=9, name="sp_equi_title")
@@ -703,7 +604,7 @@ def _show_equi_bucket(bucket):
         vm_equi_band2[0] = plotter2.add_mesh(
             grid_vm.extract_cells(vm_cells),
             scalars="von_mises", cmap="hot", opacity=1.0,
-            clim=[vm_min_val, vm_max_val], show_edges=False, show_scalar_bar=False,
+            clim=[vm_min_val, vm_clip_max], show_edges=False, show_scalar_bar=False,
         )
     plotter2.subplot(0, 1)
     plotter2.add_text(_equi_title_vm(bucket), font_size=9, name="vm_equi_title")

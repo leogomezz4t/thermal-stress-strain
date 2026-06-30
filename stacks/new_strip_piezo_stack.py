@@ -11,7 +11,6 @@ PIEZO_TAG_EVEN = 3
 CAP_TAG       = 4
 EPOXY_TAG     = 5
 
-
 @dataclass
 class _Dims:
     piezo_length: float  # side length of square piezoelectric slab [mm]
@@ -24,21 +23,24 @@ class _Dims:
     cap_dz:      float  # cap thickness [mm]
 
 
-def _add_electrode_layer(model, e_tags, epoxy_tags, x, y, z, d: _Dims):
-    left  = model.occ.add_box(x - (d.e_dx/2) + (1/3)*d.piezo_length, y, z, d.e_dx, d.e_dy, d.e_dz)
-    right = model.occ.add_box(x - (d.e_dx/2) + (2/3)*d.piezo_length, y, z, d.e_dx, d.e_dy, d.e_dz)
-    fill  = model.occ.add_box(x,                                    y, z, d.piezo_length, d.piezo_length, d.e_dz)
-    e_tags.extend([left, right])
-    epoxy_tags.append(fill)
-    return [left, right, fill]
+def _add_electrode_epoxy_layer(model, e_tags, epoxy_tags, x, y, z, d: _Dims):
+    left_el_x = x - (d.e_dx/2) + (1/3)*d.piezo_length
+    right_el_x = x - (d.e_dx/2) + (2/3)*d.piezo_length
+    left_el  = model.occ.add_box(left_el_x, y, z, d.e_dx, d.e_dy, d.e_dz)
+    right_el = model.occ.add_box(right_el_x, y, z, d.e_dx, d.e_dy, d.e_dz)
+    left_ep  = model.occ.add_box(x, y, z, left_el_x - x, d.piezo_length, d.e_dz)
+    middle_ep = model.occ.add_box(left_el_x + d.e_dx, y, z, right_el_x - left_el_x - d.e_dx, d.piezo_length, d.e_dz)
+    right_ep = model.occ.add_box(right_el_x + d.e_dx, y, z, d.piezo_length - right_el_x - d.e_dx, d.piezo_length, d.e_dz)
 
+    e_tags.extend([left_el, right_el])
+    epoxy_tags.extend([left_ep, middle_ep, right_ep])
+    return [left_el, right_el, left_ep, middle_ep, right_ep]
 
 def _add_piezo_layer(model, e_tags, piezo_tags, epoxy_tags, x, y, z, d: _Dims):
     piezo_box = model.occ.add_box(x, y, z, d.piezo_length, d.piezo_length, d.piezo_dz)
     piezo_tags.append(piezo_box)
-    elec = _add_electrode_layer(model, e_tags, epoxy_tags, x, y, z + d.piezo_dz, d)
+    elec = _add_electrode_epoxy_layer(model, e_tags, epoxy_tags, x, y, z + d.piezo_dz, d)
     return [piezo_box] + elec
-
 
 def _build_gmsh_model(name: str, d: _Dims) -> gmsh.model:
     model = gmsh.model()
@@ -61,7 +63,7 @@ def _build_gmsh_model(name: str, d: _Dims) -> gmsh.model:
     z += d.cap_dz
 
     # Bottom electrode layer
-    all_tags.extend(_add_electrode_layer(model, electrode_tags, epoxy_tags, x, y, z, d))
+    all_tags.extend(_add_electrode_epoxy_layer(model, electrode_tags, epoxy_tags, x, y, z, d))
     z += d.e_dz
 
     # n_layers unit cells: piezoelectric slab + electrode layer
@@ -122,7 +124,6 @@ def _build_gmsh_model(name: str, d: _Dims) -> gmsh.model:
     model.mesh.generate(dim=3)
     return model
 
-
 def _model_to_mesh(model: gmsh.model, name: str, comm: MPI.Comm):
     mesh_data = gmshio.model_to_mesh(model, comm, rank=0)
     mesh_data.mesh.name = name
@@ -131,7 +132,6 @@ def _model_to_mesh(model: gmsh.model, name: str, comm: MPI.Comm):
     if mesh_data.ridge_tags is not None: mesh_data.ridge_tags.name = f"{name}_ridges"
     if mesh_data.peak_tags  is not None: mesh_data.peak_tags.name  = f"{name}_peaks"
     return mesh_data
-
 
 def create_strip_stack(
     piezo_length: float,
@@ -142,7 +142,6 @@ def create_strip_stack(
     cap_length:   float,
     cap_dz:       float,
     n_layers:     int = 16,
-    n_refinements: int = 1,
     name:         str = "StripPiezoStack",
 ):
     """Build and mesh a strip-electrode piezo stack.
@@ -160,7 +159,6 @@ def create_strip_stack(
     cap_length    Side length of the square cap slab.
     cap_dz        Thickness of each cap.
     n_layers      Number of piezoelectric + electrode unit cells.
-    n_refinements Number of times to call model.mesh.refine()
     name          Name given to the gmsh model and dolfinx mesh.
     """
     dims = _Dims(
@@ -178,9 +176,6 @@ def create_strip_stack(
     gmsh.option.setNumber("General.Terminal", 0)
     try:
         model     = _build_gmsh_model(name, dims)
-        # Refine mesh
-        for _ in range(n_refinements):
-            model.mesh.refine()
         mesh_data = _model_to_mesh(model, name, MPI.COMM_SELF)
     finally:
         gmsh.finalize()

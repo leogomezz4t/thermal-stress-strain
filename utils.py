@@ -1,8 +1,8 @@
 from dolfinx import plot
 import pyvista
-from stacks.full_piezo_stack import ELECTRODE_TAG, PIEZO_TAG, CAP_TAG, EPOXY_TAG
+from stacks.full_piezo_stack import ELECTRODE_TAG, PIEZO_TAG_EVEN, PIEZO_TAG_ODD, CAP_TAG, EPOXY_TAG
 
-tag_colors = {ELECTRODE_TAG: "gray", PIEZO_TAG: "orange", CAP_TAG: "white", EPOXY_TAG: "yellow"}
+tag_colors = {ELECTRODE_TAG: "gray", PIEZO_TAG_ODD: "orange", PIEZO_TAG_EVEN: "orange", CAP_TAG: "white", EPOXY_TAG: "yellow"}
 
 def show_mesh(mesh_data):        
     cells, types, x = plot.vtk_mesh(mesh_data.mesh)
